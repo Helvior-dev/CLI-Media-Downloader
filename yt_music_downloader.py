@@ -26,9 +26,6 @@ console = Console()
 DOWNLOADS_PATH = Path.home() / "Downloads"
 FORBIDDEN_CHARS = r'\/:*?"<>|'
 
-# Browsers yt-dlp can extract cookies from
-SUPPORTED_BROWSERS = ["chrome", "firefox", "edge", "opera", "brave", "chromium", "safari", "vivaldi"]
-
 # Human-readable error reason mapping
 ERROR_REASONS: list[tuple[str, str]] = [
     ("Sign in to confirm your age",  "Age-restricted — cookies required"),
@@ -72,7 +69,6 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 DEFAULT_CONFIG: dict = {
     "default_format": None,   # key from AUDIO_FORMATS
     "default_output": None,   # default output folder
-    "browser":        None,   # browser for cookie extraction
 }
 
 
@@ -204,7 +200,7 @@ def inspect_url(url: str) -> dict:
 
 class ErrorLogger:
     """
-    FIX v1.0:
+    FIX v2.2:
     - current_info is updated on every progress hook call (including first
       'downloading' event), so title/artist are always present in the log.
     - Errors are formatted with friendly_error() for human-readable reasons.
@@ -627,7 +623,7 @@ class Downloader:
     def _on_progress(self, d: dict) -> None:
         status = d["status"]
 
-        # FIX v1.0: update current_info on EVERY hook call so ErrorLogger has fresh data
+        # FIX v2.2: update current_info on EVERY hook call so ErrorLogger has fresh data
         # even when the track fails before/during the first download chunk.
         if info := d.get("info_dict"):
             self._error_logger.current_info = info
@@ -704,11 +700,6 @@ class Downloader:
             opts["download_archive"] = str(archive_path)
         if FFMPEG_PATH:
             opts["ffmpeg_location"] = FFMPEG_PATH
-        # ── Cookies for age-restricted videos ─────────────────────────────────
-        # FIX v1.0: pass browser cookies so 18+ tracks can be downloaded
-        browser = self.cfg.get("browser")
-        if browser and browser.lower() in SUPPORTED_BROWSERS:
-            opts["cookiesfrombrowser"] = (browser.lower(),)
         return opts
 
     # ── Archive / session status ──────────────────────────────────────────────
@@ -728,8 +719,6 @@ class Downloader:
             self._download_order = list(prev)
             self._stem_to_index  = dict(session["stem_to_index"])
             self._stem_to_vid    = dict(session["stem_to_vid"])
-        browser = self.cfg.get("browser")
-        lines.append(f"[dim]Cookies:[/] [bold]{browser}[/] browser" if browser else "[dim]Cookies: none — age-restricted tracks will fail[/]")
         console.print(Panel("\n".join(lines), border_style="cyan", box=box.ROUNDED))
 
     def _load_vid_map(self) -> dict[str, str]:
@@ -790,8 +779,6 @@ class Downloader:
         table.add_row("Time elapsed", format_time(elapsed))
         table.add_row("File size" if self.single else "Folder size", format_size(folder_size))
         table.add_row("Saved to",     str(self.output_dir))
-        if self.cfg.get("browser"):
-            table.add_row("Cookies", self.cfg["browser"])
         if not self.single:
             archive = hidden_path(self.output_dir, "downloaded_archive.txt")
             if archive.exists():
@@ -829,7 +816,8 @@ class Downloader:
 
     # ── Main download ─────────────────────────────────────────────────────────
 
-    def download(self, url: str) -> None:
+    def download(self, url: str) -> bool:
+        """Runs the download session. Returns True if it completed with no failed tracks."""
         if self._failed_log.exists():
             self._failed_log.unlink()
         if not self.single:
@@ -865,6 +853,7 @@ class Downloader:
             sync_remove_deleted(self.output_dir, self.fmt["ext"], self.playlist_entries, self._stem_to_index)
         self._hide_service_files()
         self._print_summary(time.time() - start)
+        return self._count_failed_log() == 0 and not self._abort
 
 
 # ─── UI helpers ───────────────────────────────────────────────────────────────
@@ -880,29 +869,6 @@ def prompt_folder(label: str, must_exist: bool = True) -> Path:
         console.print(f"[bold red]Folder not found:[/] {path}")
         sys.exit(1)
     return path
-
-
-def select_browser(cfg: dict) -> None:
-    """Interactive browser selection. Updates cfg and saves config.json."""
-    current = cfg.get("browser")
-    current_label = f"[dim](current: {current})[/]" if current else "[dim](not set)[/]"
-    lines = "\n".join(f"[bold white]{i+1:>2}[/]  {b.capitalize()}" for i, b in enumerate(SUPPORTED_BROWSERS))
-    console.print(Panel(
-        f"{lines}\n[bold white] 0[/]  Disable cookies\n\nCurrent: {current_label}\n"
-        "[dim]Cookies allow downloading age-restricted (18+) videos.\nYou must be logged in to YouTube in the chosen browser.[/]",
-        title="[bold cyan]Browser for cookies[/]", border_style="cyan", box=box.ROUNDED, width=48,
-    ))
-    choices = [str(i) for i in range(len(SUPPORTED_BROWSERS) + 1)]
-    default = str(SUPPORTED_BROWSERS.index(current) + 1) if current in SUPPORTED_BROWSERS else "0"
-    idx     = int(ask("Select", choices, default))
-    console.print()
-    if idx == 0:
-        cfg["browser"] = None
-        console.print("[dim]  Cookies disabled.[/]")
-    else:
-        cfg["browser"] = SUPPORTED_BROWSERS[idx - 1]
-        console.print(f"[green]  Browser set to:[/] [bold]{cfg['browser']}[/]")
-    save_config(cfg)
 
 
 def resolve_single_output_dir() -> Path:
@@ -986,11 +952,12 @@ def count_already_archived(output_dir: Path, playlist_entries: list) -> int:
 
 # ─── Single download session ──────────────────────────────────────────────────
 
-def run_once(cfg: dict) -> None:
+def run_once(cfg: dict) -> bool:
+    """Runs one download session. Returns True on success (no failed tracks)."""
     url = Prompt.ask("[bold cyan]  YouTube Music URL[/]").strip()
     if not url:
         console.print("[red]No URL provided.[/]")
-        return
+        return False
     with console.status("[bold cyan]Checking URL...[/]", spinner="dots"):
         meta = inspect_url(url)
     single, title, total_tracks, playlist_entries = meta["single"], meta["title"], meta["count"], meta["entries"]
@@ -1020,7 +987,7 @@ def run_once(cfg: dict) -> None:
                 console.print()
             else:
                 print_size_estimate(total_tracks, fmt)
-    Downloader(
+    return Downloader(
         output_dir, fmt, cfg=cfg, single=single, total_tracks=total_tracks,
         playlist_title=title if not single else None,
         playlist_entries=playlist_entries, is_continuation=is_continuation,
@@ -1035,59 +1002,30 @@ def main() -> None:
         "[bold cyan]LOGOVO[/] [bold white]DUSHNIL[/]",
         border_style="cyan", box=box.DOUBLE, expand=False,
     ), justify="center")
-    console.print("  YTMusic Downloader by Helvior  v1.0", style="dim white", justify="center")
+    console.print("  YTMusic Downloader by Helvior  v2.2", style="dim white", justify="center")
     console.print()
-    cfg     = load_config()
-    browser = cfg.get("browser")
-    if browser:
-        console.print(f"  [dim]Cookies:[/] [green]{browser}[/]  [dim](age-restricted videos enabled)[/]\n")
-    else:
-        console.print("  [dim]Cookies:[/] [yellow]not set[/] — [dim]18+ videos will fail. Go to Settings to enable.[/]\n")
+    cfg = load_config()
 
     while True:
         console.print(Panel(
             "[bold white]1[/]  Download track / playlist\n"
-            "[bold white]2[/]  Settings  [dim](browser for cookies)[/]\n"
-            "[bold white]3[/]  Exit",
+            "[bold white]2[/]  Exit",
             title="[bold cyan]Menu[/]", border_style="cyan", box=box.ROUNDED, width=46,
         ))
-        choice = ask("Select", ["1", "2", "3"], "1")
+        choice = ask("Select", ["1", "2"], "1")
         console.print()
 
-        if choice == "3":
+        if choice == "2":
             console.print("[dim]  Goodbye![/]")
             break
 
-        if choice == "2":
-            console.print(Panel(
-                "[bold white]1[/]  Set browser for cookies  [dim](fixes 18+ age-restricted videos)[/]\n"
-                "[bold white]2[/]  Back",
-                title="[bold cyan]Settings[/]", border_style="cyan", box=box.ROUNDED, width=56,
-            ))
-            s = ask("Select", ["1", "2"], "2")
-            console.print()
-            if s == "1":
-                select_browser(cfg)
-            console.print()
-            continue
-
-        run_once(cfg)
+        success = run_once(cfg)
         console.print()
-        console.print(Panel(
-            "[bold white]1[/]  Download another\n"
-            "[bold white]2[/]  Back to menu",
-            title="[bold cyan]What's next?[/]", border_style="cyan", box=box.ROUNDED, width=34,
-        ))
-        nxt = ask("Select", ["1", "2"], "2")
+        if success:
+            console.print("[bold green]  ✔  Success.[/] [dim]Back at the main menu.[/]")
+        else:
+            console.print("[bold yellow]  ⚠  Finished with errors.[/] [dim]Back at the main menu.[/]")
         console.print()
-        if nxt == "1":
-            console.clear()
-            console.print(Panel(
-                "[bold cyan]LOGOVO[/] [bold white]DUSHNIL[/]",
-                border_style="cyan", box=box.DOUBLE, expand=False,
-            ), justify="center")
-            console.print("  YTMusic Downloader by Helvior  v1.0", style="dim white", justify="center")
-            console.print()
 
 
 if __name__ == "__main__":
