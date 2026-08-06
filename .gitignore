@@ -12,3 +12,7 @@ build/
 *.spec
 
 data/
+
+media/
+
+ffmpeg.exe
