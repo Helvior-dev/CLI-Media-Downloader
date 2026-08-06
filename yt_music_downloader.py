@@ -1,4 +1,5 @@
 import ctypes
+import difflib
 import io
 import json
 import os
@@ -6,6 +7,7 @@ import re
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import yt_dlp
@@ -65,10 +67,48 @@ AUDIO_FORMATS = {
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+APP_NAME = "LogovoDushnil"
+
+
+def get_app_data_dir() -> Path:
+    """
+    Where config.json / sessions_log.txt live.
+    - Frozen (exe, built with PyInstaller/auto-py-to-exe): %APPDATA%\\LogovoDushnil
+      so it works regardless of where the exe is installed, doesn't need write
+      access to the install folder, and survives reinstalls/updates.
+    - Running from source (development): a local "data" folder next to the
+      script, kept out of the project root.
+    One-time migration: if this is the first run in the new location and the
+    old files (config.json / sessions_log.txt sitting next to the script/exe
+    from earlier versions) exist, move them in rather than starting fresh.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(os.getenv("APPDATA") or Path.home())
+        target = base / APP_NAME
+    else:
+        target = Path(__file__).parent / "data"
+    target.mkdir(parents=True, exist_ok=True)
+
+    old_base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+    for name in ("config.json", "sessions_log.txt"):
+        old_file, new_file = old_base / name, target / name
+        if old_file.exists() and not new_file.exists():
+            try:
+                new_file.write_text(old_file.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:
+                pass
+    return target
+
+
+APP_DATA_DIR = get_app_data_dir()
+CONFIG_PATH = APP_DATA_DIR / "config.json"
+SESSIONS_LOG_PATH = APP_DATA_DIR / "sessions_log.txt"
+MAX_RECENT_FOLDERS = 10
+
 DEFAULT_CONFIG: dict = {
-    "default_format": None,   # key from AUDIO_FORMATS
-    "default_output": None,   # default output folder
+    "default_format":  None,  # key from AUDIO_FORMATS
+    "default_output":  None,  # default output folder
+    "recent_folders":  [],    # list of {"path": str, "title": str, "last_used": iso-str}
 }
 
 
@@ -87,6 +127,66 @@ def save_config(cfg: dict) -> None:
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
+
+
+def remember_folder(cfg: dict, path: Path, title: str) -> None:
+    """Add/update a folder in the recent-folders list (most recent first, capped at MAX_RECENT_FOLDERS)."""
+    entries = [e for e in cfg.get("recent_folders", []) if e.get("path") != str(path)]
+    entries.insert(0, {"path": str(path), "title": title, "last_used": datetime.now().isoformat(timespec="seconds")})
+    cfg["recent_folders"] = entries[:MAX_RECENT_FOLDERS]
+    save_config(cfg)
+
+
+def format_recent_date(iso_str: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%d %b %Y, %H:%M")
+    except Exception:
+        return iso_str
+
+
+def parse_folder_sessions(folder: Path, limit: int = 5) -> list[dict]:
+    """
+    Parse sessions_log.txt and return up to `limit` most recent session records
+    for the given folder (most recent first). Each record: timestamp, downloaded,
+    skipped, failed count, and list of (header, reason) failed tracks.
+    """
+    if not SESSIONS_LOG_PATH.exists():
+        return []
+    target = str(folder)
+    blocks = SESSIONS_LOG_PATH.read_text(encoding="utf-8").split("\n\n")
+    records: list[dict] = []
+    for block in blocks:
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        header_match = re.match(r"\[(.+?)\]", lines[0])
+        if not header_match:
+            continue
+        folder_line = next((ln for ln in lines if ln.strip().startswith("Folder:")), "")
+        if folder_line.split("Folder:", 1)[-1].strip() != target:
+            continue
+        rec = {
+            "timestamp": header_match.group(1),
+            "downloaded": 0, "skipped": 0, "failed": 0,
+            "failed_tracks": [],
+        }
+        for ln in lines[1:]:
+            s = ln.strip()
+            if s.startswith("Downloaded:"):
+                rec["downloaded"] = int(re.search(r"\d+", s).group())
+            elif s.startswith("Skipped:"):
+                rec["skipped"] = int(re.search(r"\d+", s).group())
+            elif s.startswith("Failed:"):
+                rec["failed"] = int(re.search(r"\d+", s).group())
+            elif s.startswith("✘"):
+                rest = s[1:].strip()
+                if " :: " in rest:
+                    h, r = rest.split(" :: ", 1)
+                    rec["failed_tracks"].append((h.strip(), r.strip()))
+        records.append(rec)
+    records.sort(key=lambda r: r["timestamp"], reverse=True)
+    return records[:limit]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -200,7 +300,7 @@ def inspect_url(url: str) -> dict:
 
 class ErrorLogger:
     """
-    FIX v2.2:
+    FIX v2.0:
     - current_info is updated on every progress hook call (including first
       'downloading' event), so title/artist are always present in the log.
     - Errors are formatted with friendly_error() for human-readable reasons.
@@ -421,6 +521,70 @@ def _extract_entry_id(entry: dict) -> str:
     return vid.split("v=")[-1].split("&")[0].strip()
 
 
+def _normalize_title(title: str) -> str:
+    """Strip common noise (remaster tags, years, brackets) so fuzzy matching compares the core title."""
+    t = title.lower()
+    t = re.sub(r"\(.*?\)|\[.*?\]", " ", t)                  # drop bracketed content
+    t = re.sub(r"\b(remaster(ed)?|live|acoustic|mono|stereo|version|edit|remix|explicit|clean|\d{4})\b", " ", t)
+    t = re.sub(r"[^\w\s]", " ", t)                          # drop punctuation
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def check_title_duplicates(output_dir: Path, ext: str, playlist_entries: list) -> None:
+    """
+    For playlist entries not yet in the archive, fuzzy-match their title against
+    already-downloaded files in the folder. On a likely duplicate (e.g. a live/remaster
+    version of a track already present), ask the user whether to download it anyway
+    or skip it (skipping adds its ID to the archive so yt-dlp won't fetch it).
+    """
+    if not playlist_entries:
+        return
+    archive_path = hidden_path(output_dir, "downloaded_archive.txt")
+    archived_ids = _read_archive_ids(archive_path)
+    existing_titles = [(_normalize_title(f.stem), f.stem) for f in output_dir.glob(f"*.{ext}")]
+    if not existing_titles:
+        return
+    to_skip: list[str] = []
+    for entry in playlist_entries:
+        if not entry:
+            continue
+        vid = _extract_entry_id(entry)
+        if not vid or vid in archived_ids:
+            continue
+        title = entry.get("title") or ""
+        if not title:
+            continue
+        norm = _normalize_title(title)
+        if not norm:
+            continue
+        best_ratio, best_match = 0.0, ""
+        for existing_norm, existing_name in existing_titles:
+            ratio = difflib.SequenceMatcher(None, norm, existing_norm).ratio()
+            if ratio > best_ratio:
+                best_ratio, best_match = ratio, existing_name
+        if best_ratio >= 0.8:
+            console.print(Panel(
+                f"[white]New:[/]      {title}\n"
+                f"[white]Existing:[/] {best_match}\n"
+                f"[dim]Similarity: {best_ratio:.0%}[/]",
+                title="[yellow]Possible duplicate[/]", border_style="yellow", box=box.ROUNDED,
+            ))
+            if not Confirm.ask("[bold cyan]  Download it anyway?[/]", default=False):
+                to_skip.append(vid)
+                console.print("[dim]  Skipped.[/]\n")
+            else:
+                console.print()
+    if to_skip:
+        try:
+            unhide_file(archive_path)
+            with open(archive_path, "a", encoding="utf-8") as f:
+                for vid in to_skip:
+                    f.write(f"youtube {vid}\n")
+            hide_file(archive_path)
+        except Exception:
+            pass
+
+
 def _parse_failed_reasons(failed_log: Path) -> dict[str, str]:
     """Parse failed_downloads.txt into {title: reason} for cross-referencing during sync."""
     reasons: dict[str, str] = {}
@@ -518,6 +682,9 @@ class Downloader:
         self._progress: Progress | None = None
         self._task_id         = None
         self._current_track   = 0
+        self._track_durations: list[float] = []
+        self._current_track_start: float | None = None
+        self._current_track_name: str = ""
         self._stem_to_index: dict[str, int] = {}
         self._stem_to_vid:   dict[str, str] = {}
         self._download_order: list[str]     = []
@@ -620,10 +787,20 @@ class Downloader:
             return name
         return f"[{self._current_track}/{self.total_tracks}] {name}"
 
+    def _eta_suffix(self) -> str:
+        """Estimated time remaining, based on the average duration of completed tracks so far."""
+        if self.single or not self.total_tracks or not self._track_durations:
+            return ""
+        remaining = max(self.total_tracks - self._current_track, 0)
+        if remaining == 0:
+            return ""
+        avg = sum(self._track_durations) / len(self._track_durations)
+        return f"  [dim]· ~{format_time(avg * remaining)} left[/]"
+
     def _on_progress(self, d: dict) -> None:
         status = d["status"]
 
-        # FIX v2.2: update current_info on EVERY hook call so ErrorLogger has fresh data
+        # FIX v2.0: update current_info on EVERY hook call so ErrorLogger has fresh data
         # even when the track fails before/during the first download chunk.
         if info := d.get("info_dict"):
             self._error_logger.current_info = info
@@ -634,12 +811,22 @@ class Downloader:
             except ValueError:
                 pct = 0.0
             name = Path(d.get("filename", "")).stem[:45]
+            if name != self._current_track_name:
+                self._current_track_name  = name
+                self._current_track_start = time.time()
             if self._progress and self._task_id is not None:
-                self._progress.update(self._task_id, completed=pct, description=f"[cyan]{self._track_label(name)}[/]")
+                label = f"[cyan]{self._track_label(name)}[/]{self._eta_suffix()}"
+                self._progress.update(self._task_id, completed=pct, description=label)
 
         elif status == "finished":
             self._current_track += 1
             self.new_count += 1
+            if self._current_track_start is not None:
+                # Only track real download durations (skip near-zero, likely from a cache hit).
+                dur = time.time() - self._current_track_start
+                if dur > 0.5 and len(self._track_durations) < 5:
+                    self._track_durations.append(dur)
+            self._current_track_start = None
             info = d.get("info_dict") or {}
             self.last_title = info.get("title") or Path(d.get("filename", "")).stem
             stem = Path(d.get("filename", "")).stem
@@ -763,6 +950,28 @@ class Downloader:
             entries.append((header, reason))
         return entries
 
+    def _write_session_log(self, elapsed: float, failed_count: int) -> None:
+        """Append a record of this session to the global sessions log (accumulates, never overwritten)."""
+        try:
+            failed_entries = self._read_failed_entries() if failed_count else []
+            lines = [f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"]
+            target = self.playlist_title or self.last_title or str(self.output_dir)
+            lines.append(f"  Target:      {target}")
+            lines.append(f"  Folder:      {self.output_dir}")
+            lines.append(f"  Format:      {self.fmt['label']}")
+            lines.append(f"  Downloaded:  {self.new_count} track(s)")
+            if self.skipped_count:
+                lines.append(f"  Skipped:     {self.skipped_count} track(s)")
+            lines.append(f"  Failed:      {failed_count} track(s)")
+            lines.append(f"  Elapsed:     {format_time(elapsed)}")
+            for header, reason in failed_entries:
+                lines.append(f"    ✘ {header} :: {reason}")
+            lines.append("")
+            with open(SESSIONS_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            pass
+
     def _print_summary(self, elapsed: float) -> None:
         ext          = self.fmt["ext"]
         folder_size  = sum(f.stat().st_size for f in self.output_dir.rglob(f"*.{ext}") if f.is_file())
@@ -796,6 +1005,7 @@ class Downloader:
             ))
         else:
             console.print("[bold green]  ✔  Done.[/]")
+        self._write_session_log(elapsed, failed_count)
 
     # ── Retry failed ──────────────────────────────────────────────────────────
 
@@ -823,6 +1033,8 @@ class Downloader:
         if not self.single:
             self._print_archive_status()
             self._build_full_stem_index()
+            if self.is_continuation:
+                check_title_duplicates(self.output_dir, self.fmt["ext"], self.playlist_entries)
         self._progress = Progress(
             SpinnerColumn(style="cyan"),
             TextColumn("[cyan]{task.description}"),
@@ -889,29 +1101,125 @@ def resolve_single_output_dir() -> Path:
     return path
 
 
-def resolve_playlist_output_dir(playlist_title: str) -> tuple[Path, bool]:
+def pick_recent_folder(cfg: dict) -> Path | None:
+    """Show the recent-folders list and let the user pick one, or type a new path. Returns None if list is empty."""
+    recent = cfg.get("recent_folders", [])
+    if not recent:
+        return None
+    lines = [
+        f"[bold white]{i+1:>2}[/]  {e['title']:<30} [dim]{format_recent_date(e.get('last_used', ''))}[/]"
+        for i, e in enumerate(recent)
+    ]
+    lines.append(f"[bold white] 0[/]  Type a different path")
+    console.print(Panel("\n".join(lines), title="[bold cyan]Recent folders[/]", border_style="cyan", box=box.ROUNDED, width=64))
+    choices = [str(i) for i in range(len(recent) + 1)]
+    idx = int(ask("Select", choices, "1"))
+    console.print()
+    if idx == 0:
+        return None
+    return Path(recent[idx - 1]["path"])
+
+
+def show_folder_stats(cfg: dict) -> None:
+    """Pick a folder from history and show its sync status: last sync date, tracks since
+    then, total tracks, and recent failures pulled from the sessions log."""
+    recent = cfg.get("recent_folders", [])
+    if not recent:
+        console.print("[yellow]  No folders in history yet — download something first.[/]")
+        return
+    path = pick_recent_folder(cfg)
+    if path is None:
+        console.print("[dim]  Cancelled.[/]")
+        return
+    if not path.exists():
+        console.print(f"[bold red]Folder not found:[/] {path}")
+        return
+
+    entry = next((e for e in recent if e.get("path") == str(path)), None)
+    title = entry["title"] if entry else path.name
+
+    archive = hidden_path(path, "downloaded_archive.txt")
+    total = len(_read_archive_ids(archive)) if archive.exists() else 0
+
+    sessions = parse_folder_sessions(path, limit=5)
+
+    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    table.add_column(style="dim white"); table.add_column(style="bold white")
+    table.add_row("Playlist", title)
+    table.add_row("Folder", str(path))
+    table.add_row("Total tracks", f"{total}")
+    if sessions:
+        last = sessions[0]
+        table.add_row("Last sync", format_recent_date(last["timestamp"].replace(" ", "T")))
+        table.add_row("Downloaded last time", f"{last['downloaded']} track(s)")
+        if last["skipped"]:
+            table.add_row("Skipped last time", f"{last['skipped']} track(s)")
+    else:
+        table.add_row("Last sync", "[dim]No session history found[/]")
+    console.print()
+    console.print(Panel(table, title="[bold cyan]Folder Stats[/]", border_style="cyan", box=box.ROUNDED))
+
+    failed_all: list[tuple[str, str, str]] = []  # (timestamp, header, reason)
+    for rec in sessions:
+        for header, reason in rec["failed_tracks"]:
+            failed_all.append((rec["timestamp"], header, reason))
+    if failed_all:
+        lines = [f"[white]{header}[/]  [dim]({ts})[/]\n  [red]→ {reason}[/]" for ts, header, reason in failed_all]
+        console.print(Panel(
+            "\n".join(lines),
+            title=f"[bold red]Failed tracks — last {len(sessions)} session(s)[/]",
+            border_style="red", box=box.ROUNDED,
+        ))
+    else:
+        console.print("[dim]  No failed tracks in recent history.[/]")
+
+
+def resolve_playlist_output_dir(playlist_title: str, cfg: dict) -> tuple[Path, bool]:
     """Returns (output_dir, is_continuation)."""
     console.print(Panel(
         "[bold white]1[/]  New download       [dim](auto-create folder in ~/Downloads)[/]\n"
         "[bold white]2[/]  Continue existing  [dim](specify existing folder path)[/]\n"
-        "[bold white]3[/]  Custom path        [dim](any folder, created if needed)[/]",
+        "[bold white]3[/]  Custom path        [dim](any folder, created if needed)[/]\n"
+        "[bold white]4[/]  Quick continue     [dim](pick from recent, skip the questions)[/]",
         title="[bold cyan]Mode[/]", border_style="cyan", box=box.ROUNDED, width=58,
     ))
-    mode = ask("Select", ["1", "2", "3"], "1")
+    mode = ask("Select", ["1", "2", "3", "4"], "1")
     console.print()
+    if mode == "4":
+        recent = cfg.get("recent_folders", [])
+        if not recent:
+            console.print("[yellow]  No recent folders yet — falling back to manual path.[/]")
+            path = prompt_folder("Path to playlist folder", must_exist=True)
+        else:
+            path = Path(recent[0]["path"])
+            if not path.exists():
+                console.print(f"[bold red]Folder not found:[/] {path}")
+                sys.exit(1)
+            console.print(f"[green]  Quick continue:[/] [bold]{path}[/]")
+        restore_dates_from_order(path)
+        remember_folder(cfg, path, playlist_title)
+        return path, True
     if mode == "2":
-        path = prompt_folder("Path to playlist folder", must_exist=True)
+        path = pick_recent_folder(cfg)
+        if path is None:
+            path = prompt_folder("Path to playlist folder", must_exist=True)
+        elif not path.exists():
+            console.print(f"[bold red]Folder not found:[/] {path}")
+            sys.exit(1)
         restore_dates_from_order(path)
         console.print(f"[green]  Continuing in:[/] {path}")
+        remember_folder(cfg, path, playlist_title)
         return path, True
     if mode == "3":
         path = prompt_folder("Custom folder path", must_exist=False)
         path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]  Saving to:[/] [bold]{path}[/]")
+        remember_folder(cfg, path, playlist_title)
         return path, False
     path = DOWNLOADS_PATH / playlist_title
     path.mkdir(parents=True, exist_ok=True)
     console.print(f"[green]  Playlist folder:[/] [bold]{path}[/]")
+    remember_folder(cfg, path, playlist_title)
     return path, False
 
 
@@ -974,7 +1282,7 @@ def run_once(cfg: dict) -> bool:
         if total_tracks:
             print_size_estimate(total_tracks, fmt)
     else:
-        output_dir, is_continuation = resolve_playlist_output_dir(title)
+        output_dir, is_continuation = resolve_playlist_output_dir(title, cfg)
         if total_tracks:
             already = count_already_archived(output_dir, playlist_entries) if is_continuation else 0
             remaining = max(total_tracks - already, 0)
@@ -1002,22 +1310,28 @@ def main() -> None:
         "[bold cyan]LOGOVO[/] [bold white]DUSHNIL[/]",
         border_style="cyan", box=box.DOUBLE, expand=False,
     ), justify="center")
-    console.print("  YTMusic Downloader by Helvior  v2.2", style="dim white", justify="center")
+    console.print("  YTMusic Downloader by Helvior  v2.0", style="dim white", justify="center")
     console.print()
     cfg = load_config()
 
     while True:
         console.print(Panel(
             "[bold white]1[/]  Download track / playlist\n"
-            "[bold white]2[/]  Exit",
-            title="[bold cyan]Menu[/]", border_style="cyan", box=box.ROUNDED, width=46,
+            "[bold white]2[/]  Folder stats  [dim](check sync status, no download)[/]\n"
+            "[bold white]3[/]  Exit",
+            title="[bold cyan]Menu[/]", border_style="cyan", box=box.ROUNDED, width=54,
         ))
-        choice = ask("Select", ["1", "2"], "1")
+        choice = ask("Select", ["1", "2", "3"], "1")
         console.print()
 
-        if choice == "2":
+        if choice == "3":
             console.print("[dim]  Goodbye![/]")
             break
+
+        if choice == "2":
+            show_folder_stats(cfg)
+            console.print()
+            continue
 
         success = run_once(cfg)
         console.print()
