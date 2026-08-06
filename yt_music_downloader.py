@@ -887,6 +887,13 @@ class Downloader:
             opts["download_archive"] = str(archive_path)
         if FFMPEG_PATH:
             opts["ffmpeg_location"] = FFMPEG_PATH
+        if self.cfg and (speed_mb := self.cfg.get("speed_limit_mb")):
+            try:
+                opts["ratelimit"] = int(float(speed_mb) * 1024 * 1024)
+            except ValueError:
+                pass
+            except ValueError:
+                pass
         return opts
 
     # ── Archive / session status ──────────────────────────────────────────────

@@ -1,148 +1,116 @@
-# AudioSync — Logovo Dushnil YTMusic Downloader
+# Logovo-Downloads — Logovo Dushnil Media Suite
 
-AudioSync is a Python CLI application for downloading audio from supported
-platforms using `yt-dlp`.
+**Logovo-Downloads** is a Python CLI application and standalone Media Suite for downloading audio and video from YouTube and other supported platforms using `yt-dlp` and `FFmpeg`.
 
-Unlike a regular downloader, AudioSync keeps track of downloaded tracks,
-resumes interrupted sessions, synchronizes playlists, remembers where you've
-downloaded before, and automatically processes metadata and cover art.
+Unlike basic downloaders, Logovo-Downloads features a unified interactive menu, tracks downloaded files, resumes interrupted sessions, synchronizes playlists, embeds metadata and high-res poster artwork, and hides service files so your media folders stay clean.
 
-## Features
+---
 
-- Download single tracks or entire playlists
-- Resume interrupted downloads (safe Ctrl+C, picks up where it left off)
-- Skip already downloaded tracks (per-folder download archive)
-- Playlist synchronization — detects tracks removed from the source playlist
-  and offers to delete the corresponding local files
-- Fuzzy duplicate detection — flags likely duplicates (e.g. a live or
-  remastered version of a track you already have) and asks before downloading
-- Recent-folders history — jump back into a playlist folder without retyping
-  the path, including a one-step "Quick continue" mode
-- Folder stats — check a folder's last sync date, tracks downloaded since
-  last time, total tracks, and recent failures without starting a download
-- Session log — every session (downloaded/skipped/failed counts and failure
-  reasons) is appended to a persistent log, not just shown once in the console
-- Estimated time remaining during playlist downloads, based on the actual
-  speed of the first few tracks
-- Automatic metadata fixing (artist, track number, album) and square-cropped
-  embedded cover art
-- Multiple audio formats, lossless and lossy
-- Human-readable failure reasons (age-restricted, unavailable, removed, etc.)
-  shown directly in the console — no need to open a log file
-- Rich terminal interface
+## 🌟 Key Features
 
-## Supported Platforms
+### 🎵 Audio Downloader Module
+- **Multiple Audio Formats**: Lossless (FLAC, ALAC, WAV, AIFF) and Lossy (MP3 320/192/128kbps, AAC 256kbps, Opus 160kbps, OGG Vorbis).
+- **Embedded Cover Art**: Square-cropped high-res cover art embedded directly into ID3 / MP4 tags.
+- **Playlist Sync**: Detects tracks removed from the source playlist and offers cleanup.
+- **Fuzzy Duplicate Detection**: Identifies potential duplicate tracks (e.g., live or remastered versions).
+
+### 🎬 Video Downloader Module
+- **Video Containers & Codecs**: 
+  - Containers: `MP4`, `MKV`, `WEBM`
+  - Codecs: `H.264 (AVC)`, `H.265 (HEVC)`, `AV1`, `VP9`
+  - Resolutions: `1080p`, `4K`, `720p`, `480p`, `Best available`
+- **Subtitles & Closed Captions**: Choice of languages (English, Russian, dual, or all) with options to embed into container (`MKV/MP4`) or save as external `.srt` files.
+- **Poster Artwork Embedding**: Injects high-definition video thumbnails into video tags (`covr` atom for MP4).
+- **Safe Metadata Remuxing**: Creates a temporary `.bak` backup before `FFmpeg` processing and restores original files automatically if any remuxing error occurs.
+
+### ⚙️ Suite & System Features
+- **Clean Folder Protection**: All service files (`downloaded_archive.txt`, `failed_downloads.txt`, `session_progress.json`, `playlist_order.txt`) are automatically hidden using OS file attributes (`hidden_path`).
+- **Windows Desktop Notifications**: Native Windows balloon popups notify you when download sessions finish (can be toggled in Settings).
+- **Bandwidth & Speed Limiter**: Restrict download speed (e.g., `5 MB/s`, `10 MB/s`, `20 MB/s`) so downloads won't saturate your internet connection.
+- **Recent Folders History**: Jump back into a playlist folder instantly without retyping paths.
+- **Human-Readable Error Logging**: Converts raw stack traces into friendly descriptions (*Age-restricted*, *Bot check*, *Copyright claim*, *Region lock*, etc.) and offers 1-click retries (`_retry_failed`).
+- **Rich Terminal UI**: Live progress bars displaying completion percentage, transfer speed (`MB/s`), and estimated time remaining (`ETA`).
+
+---
+
+## 🛠 Supported Platforms
 
 Any platform supported by `yt-dlp`, including:
-
-- YouTube
-- YouTube Music
+- YouTube / YouTube Music
 - SoundCloud
 - Bandcamp
 - Vimeo
 - and many others
 
-## Requirements
+---
 
-- Python 3.12+ (a standard, non-free-threaded build — see note below)
-- FFmpeg
+## 📋 Requirements
 
-> **Note on Python versions:** avoid the free-threaded build of Python (the
-> one labeled `3.1Xt`, e.g. `3.14t`). Several packaging tools (like
-> `auto-py-to-exe`) can't yet install cleanly on it without a full C++
-> compiler toolchain. Use a regular build — `py -3.12`, `py -3.13`, etc.
+- **Python 3.12+** (standard non-free-threaded build)
+- **FFmpeg** (`ffmpeg.exe`)
 
-## Installation
+> **FFmpeg setup:** The application looks for `ffmpeg.exe` in the project root directory (or alongside the built `.exe`). If missing, it falls back to system `PATH`.
 
-Clone the repository:
+---
 
+## 🚀 Installation & Running
+
+### 1. Clone the repository
 ```bash
-git clone https://github.com/Helvior-dev/audio-sync.git
-cd audio-sync
+git clone https://github.com/Helvior-dev/Logovo-Downloads.git
+cd Logovo-Downloads
 ```
 
-Create a virtual environment:
-
-### Windows
-
+### 2. Create a virtual environment
+#### Windows (PowerShell):
 ```powershell
 py -3.12 -m venv venv
-venv\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 ```
 
-### Linux / macOS
-
+#### Linux / macOS:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-Install dependencies:
-
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-Run:
-
+### 4. Run the Media Suite
 ```bash
-python yt_music_downloader.py
+python main.py
 ```
 
-## Python Dependencies
+---
 
-```
-yt-dlp
-Pillow
-mutagen
-rich
-```
+## 📦 Building Standalone Executable (.exe)
 
-## FFmpeg
+You can package the application into a standalone Windows executable using PyInstaller.
 
-The app looks for `ffmpeg.exe` in the same folder as the script (or the built
-`.exe`). If it's not there, `yt-dlp` will fall back to `ffmpeg` on your system
-PATH.
-
-- **Windows:** `winget install --id Gyan.FFmpeg -e`, or download a build and
-  place `ffmpeg.exe` next to `yt_music_downloader.py`.
-- **macOS:** `brew install ffmpeg`
-- **Linux:** `sudo apt install ffmpeg` (or your distro's equivalent)
-
-## Where data is stored
-
-- **Running from source:** a local `data/` folder next to the script
-  (`config.json`, `sessions_log.txt`) — kept out of the project root.
-- **Running as a built `.exe`:** `%APPDATA%\LogovoDushnil\` on Windows, so it
-  works regardless of where the app is installed and doesn't need write
-  access to the install folder. Old files sitting next to the script/exe from
-  an earlier version are migrated automatically on first run.
-
-Per-playlist files (download archive, failed-track log, playlist order) are
-stored inside each playlist's own folder, alongside the downloaded tracks.
-
-## Building a standalone .exe
-
-The app can be packaged into a standalone Windows executable with
-[PyInstaller](https://pyinstaller.org/) (directly, or via the
-[auto-py-to-exe](https://github.com/brentvollebregt/auto-py-to-exe) GUI).
-
+Run the built-in build script:
 ```powershell
-pip install pyinstaller
-pyinstaller --noconfirm --onedir --console --icon "media/icon.ico" --add-data "ffmpeg.exe;." yt_music_downloader.py
+python build_exe.py
 ```
 
-- **One Directory**, not One File — starts faster and triggers far fewer
-  antivirus false positives than a self-extracting single-file build.
-- **Console Based** — this is a terminal UI (built with `rich`), not a GUI
-  app; the console window is required.
-- Add `ffmpeg.exe` as an additional file (destination `.`) if you want the
-  app to work out of the box on a machine without FFmpeg installed.
+The compiled standalone executable will be created in:
+`dist/LogovoDushnil/LogovoDushnil.exe`
 
-The result is a folder (e.g. `dist/yt_music_downloader/`) containing the
-`.exe` and all dependencies. Zip the whole folder to share it — it runs on
-any Windows machine without installing Python.
+- Bundles `ffmpeg.exe` and `media/icon.ico`.
+- Runs on any Windows machine without requiring Python.
 
-## License
+---
+
+## 📁 Data Storage & Configuration
+
+- **Running from Source**: Configuration (`config.json`) and session logs (`sessions_log.txt`) are stored in `data/`.
+- **Running as Built `.exe`**: Data is stored centrally in `%APPDATA%\LogovoDushnil\`.
+- **Per-Playlist Files**: Archive files and failure logs inside download folders are automatically hidden.
+
+---
+
+## 📄 License
 
 MIT License
