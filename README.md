@@ -1,4 +1,4 @@
-# Logovo-Downloads
+# CLI-Media-Downloader
 
 A lightweight terminal media downloader built with Python, `yt-dlp`, and `FFmpeg`.
 
@@ -8,7 +8,7 @@ A lightweight terminal media downloader built with Python, `yt-dlp`, and `FFmpeg
 
 ## Overview
 
-Logovo-Downloads is a CLI tool designed to download audio tracks and videos without cluttering your folders. It keeps track of what you've already downloaded, hides service files from your file manager, embeds artwork and metadata, and handles interrupted sessions gracefully.
+CLI-Media-Downloader is a CLI tool designed to download audio tracks and videos without cluttering your folders. It keeps track of what you've already downloaded, hides service files from your file manager, embeds artwork and metadata, and handles interrupted sessions gracefully.
 
 ---
 
@@ -47,8 +47,8 @@ Logovo-Downloads is a CLI tool designed to download audio tracks and videos with
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/Helvior-dev/Logovo-Downloads.git
-   cd Logovo-Downloads
+   git clone https://github.com/Helvior-dev/CLI-Media-Downloader.git
+   cd CLI-Media-Downloader
    ```
 
 2. Create and activate a virtual environment (Windows PowerShell):
