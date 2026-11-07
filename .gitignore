@@ -14,3 +14,7 @@ build/
 data/
 
 ffmpeg.exe
+
+# Local development notes
+AGENTS.md
+PROJECT_STATE.md

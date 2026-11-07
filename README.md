@@ -1,47 +1,32 @@
 # CLI-Media-Downloader
 
-A lightweight terminal media downloader built with Python, `yt-dlp`, and `FFmpeg`.
-
-> **Note:** This is a fan-made hobby project built with the assistance of AI (Google Antigravity / Claude) to create a clean, all-in-one downloader for personal music and video collections.
-
----
+A command-line tool for downloading audio and video with `yt-dlp` and FFmpeg.
 
 ## Overview
 
-CLI-Media-Downloader is a CLI tool designed to download audio tracks and videos without cluttering your folders. It keeps track of what you've already downloaded, hides service files from your file manager, embeds artwork and metadata, and handles interrupted sessions gracefully.
-
----
+The tool keeps a local download archive and session history, embeds metadata where supported, and can resume interrupted sessions. Playlist cleanup asks for confirmation before removing tracks with recorded IDs that are no longer in the playlist. Files without an ID record are left alone.
 
 ## Features
 
-### 🎵 Audio Downloader
-- **Formats**: FLAC, ALAC, WAV, AIFF, MP3 (320/192/128 kbps), AAC (256 kbps), Opus, and OGG Vorbis.
-- **Metadata & Covers**: Automatically crops and embeds cover art directly into ID3/M4A tags.
-- **Playlist Sync**: Detects tracks removed from YouTube playlists and offers to clean up local copies.
-- **Fuzzy Duplicate Check**: Flags potential duplicate tracks (remasters, live versions) before downloading.
+### Audio
+- Formats: FLAC, ALAC, WAV, AIFF, MP3 (320/192/128 kbps), AAC (256 kbps), Opus and OGG Vorbis.
+- Embeds metadata and artwork where supported.
+- Tracks playlist downloads and asks before deleting identified tracks removed from a playlist.
+- Checks titles for possible duplicates before downloading.
 
-### 🎬 Video Downloader
-- **Containers & Codecs**: MP4, MKV, WEBM with support for H.264, H.265, AV1, and VP9.
-- **Resolutions**: 4K, 1080p, 720p, 480p, or best available.
-- **Subtitles**: Download embedded or external `.srt` subtitles in English, Russian, dual, or all languages.
-- **Posters**: Embeds high-res video thumbnails into the file tags.
-- **Safe Remuxing**: Creates temporary `.bak` backups before modifying files with FFmpeg, preventing corrupted outputs.
+### Video
+- Containers: MP4, MKV and WEBM; codec and resolution options depend on the source.
+- Optional subtitles and metadata where available.
+- Keeps a temporary backup when adding metadata to MKV files.
 
-### ⚙️ Utilities & Settings
-- **Clean Folders**: Keeps download folders free of service text files by applying OS-level hidden attributes (`SetFileAttributesW` on Windows).
-- **Speed Limiter**: Restrict download speeds (5 MB/s, 10 MB/s, custom) to prevent network congestion.
-- **Desktop Notifications**: Windows notifications when long download sessions complete.
-- **Folder History**: Quickly resume downloads in previously used folders.
-- **Error Handling**: Converts raw `yt-dlp` logs into human-readable error reasons and offers one-click retries.
-
----
+### Settings
+- Optional download speed limit and Windows desktop notifications.
+- Recently used folders and logs for failed downloads.
 
 ## Requirements
 
 - Python 3.12 or newer
-- FFmpeg (`ffmpeg.exe` placed in the project root directory, or installed on system PATH)
-
----
+- FFmpeg (`ffmpeg.exe` in the project root, or `ffmpeg` on `PATH`)
 
 ## Quick Start
 
@@ -67,26 +52,20 @@ CLI-Media-Downloader is a CLI tool designed to download audio tracks and videos 
    python main.py
    ```
 
----
-
 ## Building a Standalone `.exe`
 
-To compile the application into a standalone folder containing `LogovoDushnil.exe`:
+To build a Windows executable, place `ffmpeg.exe` in the project root if you want it bundled, then run:
 
 ```powershell
 python build_exe.py
 ```
 
-The output executable will be generated at `dist/LogovoDushnil/LogovoDushnil.exe` bundled with `ffmpeg.exe` and `media/icon.ico`.
-
----
+The output is `dist/LogovoDushnil/LogovoDushnil.exe`. The build script uses `media/icon.ico` if present and bundles `ffmpeg.exe` only if it is in the project root. The FFmpeg binary is not included in this repository.
 
 ## Configuration & Logs
 
 - When running from source, settings and session logs are saved in `./data/`.
 - When running the compiled `.exe`, data is saved in `%APPDATA%\LogovoDushnil\`.
-
----
 
 ## License
 

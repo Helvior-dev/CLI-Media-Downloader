@@ -601,7 +601,8 @@ def _parse_failed_reasons(failed_log: Path) -> dict[str, str]:
     return reasons
 
 
-def sync_remove_deleted(output_dir: Path, ext: str, playlist_entries: list, stem_to_index: dict[str, int]) -> None:
+def sync_remove_deleted(output_dir: Path, ext: str, playlist_entries: list,
+                        stem_to_index: dict[str, int], stem_to_vid: dict[str, str]) -> None:
     if not playlist_entries:
         return
     playlist_ids = {_extract_entry_id(e) for e in playlist_entries if e} - {""}
@@ -609,7 +610,8 @@ def sync_remove_deleted(output_dir: Path, ext: str, playlist_entries: list, stem
     if not orphan_ids:
         return
     known_stems  = set(stem_to_index.keys())
-    orphan_files = [f for f in output_dir.glob(f"*.{ext}") if f.stem not in known_stems]
+    orphan_files = [f for f in output_dir.glob(f"*.{ext}")
+                    if f.stem not in known_stems and stem_to_vid.get(f.stem) in orphan_ids]
     if not orphan_files:
         return
     failed_reasons = _parse_failed_reasons(output_dir / "failed_downloads.txt")
@@ -892,8 +894,6 @@ class Downloader:
                 opts["ratelimit"] = int(float(speed_mb) * 1024 * 1024)
             except ValueError:
                 pass
-            except ValueError:
-                pass
         return opts
 
     # ── Archive / session status ──────────────────────────────────────────────
@@ -1069,7 +1069,8 @@ class Downloader:
             postprocess_files(self.output_dir, self.fmt, self._stem_to_index or None, self.playlist_title, self.total_tracks)
         if self.is_continuation and not self.single and self.playlist_entries:
             self._reconcile_full_stem_index()
-            sync_remove_deleted(self.output_dir, self.fmt["ext"], self.playlist_entries, self._stem_to_index)
+            sync_remove_deleted(self.output_dir, self.fmt["ext"], self.playlist_entries,
+                                self._stem_to_index, self._stem_to_vid)
         self._hide_service_files()
         self._print_summary(time.time() - start)
         return self._count_failed_log() == 0 and not self._abort
